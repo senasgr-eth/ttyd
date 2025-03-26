@@ -106,3 +106,24 @@ Modern browsers, See [Browser Support](https://github.com/xtermjs/xterm.js#brows
 
 * [Wetty](https://github.com/krishnasrinivas/wetty): [Node](https://nodejs.org) based web terminal (SSH/login)
 * [GoTTY](https://github.com/yudai/gotty): [Go](https://golang.org) based web terminal
+
+## PAM Authentication
+
+ttyd now supports PAM authentication for multi-user access. To use:
+
+1. Configure PAM by creating `/etc/pam.d/ttyd`:
+```
+auth required pam_unix.so
+account required pam_unix.so
+```
+
+2. Start ttyd with PAM authentication:
+```
+ttyd --pam-service ttyd --pam-log-auth
+```
+
+Options:
+- `--pam-service`: PAM service name (default: ttyd)
+- `--pam-log-auth`: Log authentication attempts
+
+Users can authenticate using Basic Auth with their system credentials.

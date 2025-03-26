@@ -6,10 +6,92 @@
 #include "server.h"
 #include "utils.h"
 
+extern char *pam_service;  // Declare pam_service as an external variable
+
 enum { AUTH_OK, AUTH_FAIL, AUTH_ERROR };
 
 static char *html_cache = NULL;
 static size_t html_cache_len = 0;
+
+static int check_auth_pam(const char *username, const char *password) {
+    fprintf(stderr, "Attempting PAM authentication for user: %s\n", username);
+    
+    pam_handle_t *pamh = NULL;
+    int retval;
+    struct pam_conv conv = {
+        pam_conv_callback,
+        (void *)password
+    };
+
+    retval = pam_start(pam_service, username, &conv, &pamh);
+    if (retval != PAM_SUCCESS) {
+        fprintf(stderr, "PAM start failed for user %s: %s\n", username, pam_strerror(pamh, retval));
+        return AUTH_FAIL;
+    }
+
+    retval = pam_authenticate(pamh, 0);
+    if (retval != PAM_SUCCESS) {
+        fprintf(stderr, "PAM authentication failed for user %s: %s\n", username, pam_strerror(pamh, retval));
+        pam_end(pamh, retval);
+        return AUTH_FAIL;
+    }
+
+    retval = pam_acct_mgmt(pamh, 0);
+    if (retval != PAM_SUCCESS) {
+        fprintf(stderr, "PAM account management failed for user %s: %s\n", username, pam_strerror(pamh, retval));
+        pam_end(pamh, retval);
+        return AUTH_FAIL;
+    }
+
+    pam_end(pamh, PAM_SUCCESS);
+    fprintf(stderr, "PAM authentication successful for user: %s\n", username);
+    return AUTH_OK;
+}
+
+static int check_auth(struct lws *wsi, struct pss_http *pss) {
+    // First, check if credentials were provided via command line
+    if (server->credential != NULL) {
+        fprintf(stderr, "Using command-line credentials\n");
+        char *decoded = base64_decode(server->credential);
+        if (decoded) {
+            char *username = strtok(decoded, ":");
+            char *password = strtok(NULL, ":");
+            
+            fprintf(stderr, "Extracted username from credentials: %s\n", username ? username : "NULL");
+            
+            int auth_result = (username && password) ? 
+                check_auth_pam(username, password) : AUTH_FAIL;
+            
+            free(decoded);
+            return auth_result;
+        }
+    }
+
+    // Then try to get Authorization header
+    char buf[256];
+    size_t n = lws_hdr_copy(wsi, buf, sizeof(buf), WSI_TOKEN_HTTP_AUTHORIZATION);
+    
+    fprintf(stderr, "Authorization header length: %zu\n", n);
+    fprintf(stderr, "Authorization header content: %s\n", buf);
+    
+    if (n >= 7 && strstr(buf, "Basic ")) {
+        char *decoded = base64_decode(buf + 6);
+        if (decoded) {
+            char *username = strtok(decoded, ":");
+            char *password = strtok(NULL, ":");
+            
+            fprintf(stderr, "Extracted username from header: %s\n", username ? username : "NULL");
+            
+            int auth_result = (username && password) ? 
+                check_auth_pam(username, password) : AUTH_FAIL;
+            
+            free(decoded);
+            return auth_result;
+        }
+    }
+    
+    return AUTH_FAIL;
+}
 
 static int send_unauthorized(struct lws *wsi, unsigned int code, enum lws_token_indexes header) {
   unsigned char buffer[1024 + LWS_PRE], *p, *end;
@@ -23,24 +105,6 @@ static int send_unauthorized(struct lws *wsi, unsigned int code, enum lws_token_
     return AUTH_FAIL;
 
   return lws_http_transaction_completed(wsi) ? AUTH_FAIL : AUTH_ERROR;
-}
-
-static int check_auth(struct lws *wsi, struct pss_http *pss) {
-  if (server->auth_header != NULL) {
-    if (lws_hdr_custom_length(wsi, server->auth_header, strlen(server->auth_header)) > 0) return AUTH_OK;
-    return send_unauthorized(wsi, HTTP_STATUS_PROXY_AUTH_REQUIRED, WSI_TOKEN_HTTP_PROXY_AUTHENTICATE);
-  }
-
-  if(server->credential != NULL) {
-    char buf[256];
-    int len = lws_hdr_copy(wsi, buf, sizeof(buf), WSI_TOKEN_HTTP_AUTHORIZATION);
-    if (len >= 7 && strstr(buf, "Basic ")) {
-      if (!strcmp(buf + 6, server->credential)) return AUTH_OK;
-    }
-    return send_unauthorized(wsi, HTTP_STATUS_UNAUTHORIZED, WSI_TOKEN_HTTP_WWW_AUTHENTICATE);
-  }
-
-  return AUTH_OK;
 }
 
 static bool accept_gzip(struct lws *wsi) {
@@ -104,7 +168,7 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
         case AUTH_OK:
           break;
         case AUTH_FAIL:
-          return 0;
+          return send_unauthorized(wsi, HTTP_STATUS_PROXY_AUTH_REQUIRED, WSI_TOKEN_HTTP_PROXY_AUTHENTICATE);
         case AUTH_ERROR:
         default:
           return 1;

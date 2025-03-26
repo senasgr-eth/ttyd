@@ -52,7 +52,13 @@ endif()
 find_package(ZLIB REQUIRED)
 find_package(Libwebsockets 3.2.0 REQUIRED)
 
-set(INCLUDE_DIRS ${ZLIB_INCLUDE_DIR} ${LIBWEBSOCKETS_INCLUDE_DIRS} ${JSON-C_INCLUDE_DIRS} ${LIBUV_INCLUDE_DIRS})
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PAM REQUIRED pam)
+include_directories(${PAM_INCLUDE_DIRS})
+
+find_package(Libwebsockets 3.2.0 REQUIRED)
+
+set(INCLUDE_DIRS ${ZLIB_INCLUDE_DIR} ${LIBWEBSOCKETS_INCLUDE_DIRS} ${JSON-C_INCLUDE_DIRS} ${LIBUV_INCLUDE_DIRS} ${PAM_INCLUDE_DIRS})
 set(LINK_LIBS ${ZLIB_LIBRARIES} ${LIBWEBSOCKETS_LIBRARIES} ${JSON-C_LIBRARIES} ${LIBUV_LIBRARIES})
 
 set (CMAKE_REQUIRED_INCLUDES ${INCLUDE_DIRS})
@@ -82,7 +88,7 @@ endif()
 
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${INCLUDE_DIRS})
-target_link_libraries(${PROJECT_NAME} ${LINK_LIBS})
+target_link_libraries(${PROJECT_NAME} ${LINK_LIBS} ${PAM_LIBRARIES})
 target_compile_definitions(${PROJECT_NAME} PUBLIC
     TTYD_VERSION="${TTYD_VERSION}"
     $<$<PLATFORM_ID:Windows>:_WIN32_WINNT=0xa00 WINVER=0xa00>

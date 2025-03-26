@@ -83,8 +83,42 @@ static const struct option options[] = {{"port", required_argument, NULL, 'p'},
                                         {"debug", required_argument, NULL, 'd'},
                                         {"version", no_argument, NULL, 'v'},
                                         {"help", no_argument, NULL, 'h'},
+                                        {"pam-service", required_argument, NULL, 'P'},
+                                        {"pam-log-auth", no_argument, NULL, 'L'},
                                         {NULL, 0, 0, 0}};
-static const char *opt_string = "p:i:U:c:H:u:g:s:w:I:b:P:f:6aSC:K:A:Wt:T:Om:oqBd:vh";
+static const char *opt_string = "p:i:U:c:H:u:g:s:w:I:b:P:f:6aSC:K:A:Wt:T:Om:oqBd:vhxPL";
+
+#include <security/pam_appl.h>
+
+char *pam_service = "login";  // Default PAM service
+
+int pam_conv_callback(int num_msg, const struct pam_message **msg,
+                      struct pam_response **resp, void *appdata_ptr) {
+    const char *password = (const char *)appdata_ptr;
+    struct pam_response *response;
+
+    if (num_msg <= 0 || msg == NULL || resp == NULL)
+        return PAM_CONV_ERR;
+
+    response = calloc(num_msg, sizeof(struct pam_response));
+    if (response == NULL)
+        return PAM_CONV_ERR;
+
+    for (int i = 0; i < num_msg; i++) {
+        switch (msg[i]->msg_style) {
+            case PAM_PROMPT_ECHO_OFF:
+                response[i].resp = strdup(password);
+                response[i].resp_retcode = 0;
+                break;
+            default:
+                free(response);
+                return PAM_CONV_ERR;
+        }
+    }
+
+    *resp = response;
+    return PAM_SUCCESS;
+}
 
 static void print_help() {
   // clang-format off
@@ -456,14 +490,19 @@ int main(int argc, char **argv) {
       } break;
 #if LWS_LIBRARY_VERSION_NUMBER >= 4000000
       case 'P': {
-        int interval = parse_int("ping-interval", optarg);
-        if (interval < 0) {
-          fprintf(stderr, "ttyd: invalid ping interval: %s\n", optarg);
-          return -1;
+        if (strcmp(options[optind].name, "ping-interval") == 0) {
+            int interval = parse_int("ping-interval", optarg);
+            if (interval < 0) {
+              fprintf(stderr, "ttyd: invalid ping interval: %s\n", optarg);
+              return -1;
+            }
+            retry.secs_since_valid_ping = interval;
+            retry.secs_since_valid_hangup = interval + 7;
+        } else if (strcmp(options[optind].name, "pam-service") == 0) {
+            pam_service = optarg;
         }
-        retry.secs_since_valid_ping = interval;
-        retry.secs_since_valid_hangup = interval + 7;
-      } break;
+        break;
+      }
 #endif
       case 'f': {
         int serv_buf_size = parse_int("srv-buf-size", optarg);
@@ -516,6 +555,11 @@ int main(int argc, char **argv) {
           struct json_object *obj = json_tokener_parse(value);
           json_object_object_add(client_prefs, key, obj != NULL ? obj : json_object_new_string(value));
         }
+        break;
+      case 'x':
+        break;
+      case 'L':
+        server->pam_log_auth = true;
         break;
       default:
         print_help();

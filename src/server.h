@@ -1,6 +1,7 @@
 #include <libwebsockets.h>
 #include <stdbool.h>
 #include <uv.h>
+#include <security/pam_appl.h>
 
 #include "pty.h"
 
@@ -61,6 +62,12 @@ typedef struct {
   bool ws_closed;
 } pty_ctx_t;
 
+// PAM conversation callback declaration
+int pam_conv_callback(int num_msg, const struct pam_message **msg,
+                      struct pam_response **resp, void *appdata_ptr);
+
+extern char *pam_service;
+
 struct server {
   int client_count;        // client count
   char *prefs_json;        // client preferences
@@ -83,4 +90,6 @@ struct server {
   char terminal_type[30];  // terminal type to report
 
   uv_loop_t *loop;         // the libuv event loop
+
+  bool pam_log_auth;
 };

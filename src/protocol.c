@@ -10,6 +10,8 @@
 #include "server.h"
 #include "utils.h"
 
+extern char *pam_service;  // Declare pam_service as an external variable
+
 // initial message list
 static char initial_cmds[] = {SET_WINDOW_TITLE, SET_PREFERENCES};
 
@@ -180,18 +182,68 @@ static void wsi_output(struct lws *wsi, pty_buf_t *buf) {
   free(message);
 }
 
+static bool check_auth_pam(struct lws *wsi, struct pss_tty *pss, const char *username, const char *password) {
+    fprintf(stderr, "Attempting PAM authentication for user: %s\n", username);
+    
+    pam_handle_t *pamh = NULL;
+    int retval;
+    struct pam_conv conv = {
+        pam_conv_callback,
+        (void *)password
+    };
+
+    retval = pam_start(pam_service, username, &conv, &pamh);
+    if (retval != PAM_SUCCESS) {
+        fprintf(stderr, "PAM start failed for user %s: %s\n", username, pam_strerror(pamh, retval));
+        return false;
+    }
+
+    retval = pam_authenticate(pamh, 0);
+    if (retval != PAM_SUCCESS) {
+        fprintf(stderr, "PAM authentication failed for user %s: %s\n", username, pam_strerror(pamh, retval));
+        pam_end(pamh, retval);
+        return false;
+    }
+
+    retval = pam_acct_mgmt(pamh, 0);
+    if (retval != PAM_SUCCESS) {
+        fprintf(stderr, "PAM account management failed for user %s: %s\n", username, pam_strerror(pamh, retval));
+        pam_end(pamh, retval);
+        return false;
+    }
+
+    pam_end(pamh, PAM_SUCCESS);
+    fprintf(stderr, "PAM authentication successful for user: %s\n", username);
+    strncpy(pss->user, username, sizeof(pss->user) - 1);
+    return true;
+}
+
 static bool check_auth(struct lws *wsi, struct pss_tty *pss) {
-  if (server->auth_header != NULL) {
-    return lws_hdr_custom_copy(wsi, pss->user, sizeof(pss->user), server->auth_header, strlen(server->auth_header)) > 0;
-  }
+    // First, check if credentials were provided via command line
+    if (server->credential != NULL) {
+        fprintf(stderr, "Using command-line credentials\n");
+        char *decoded = base64_decode(server->credential);
+        if (decoded) {
+            char *username = strtok(decoded, ":");
+            char *password = strtok(NULL, ":");
+            
+            fprintf(stderr, "Extracted username from credentials: %s\n", username ? username : "NULL");
+            
+            bool auth_result = (username && password) ? 
+                check_auth_pam(wsi, pss, username, password) : false;
+            
+            free(decoded);
+            return auth_result;
+        }
+    }
 
-  if (server->credential != NULL) {
-    char buf[256];
-    size_t n = lws_hdr_copy(wsi, buf, sizeof(buf), WSI_TOKEN_HTTP_AUTHORIZATION);
-    return n >= 7 && strstr(buf, "Basic ") && !strcmp(buf + 6, server->credential);
-  }
+    // Then check for authentication header
+    if (server->auth_header != NULL) {
+        return lws_hdr_custom_copy(wsi, pss->user, sizeof(pss->user), server->auth_header, strlen(server->auth_header)) > 0;
+    }
 
-  return true;
+    // If no credentials provided, return false
+    return false;
 }
 
 int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {

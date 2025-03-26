@@ -5,6 +5,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <openssl/evp.h>
+#include <openssl/bio.h>
+#include <openssl/buffer.h>
 
 #if defined(__linux__) && !defined(__ANDROID__)
 const char *sys_signame[NSIG] = {
@@ -161,3 +164,20 @@ void print_error(char *func) {
   LocalFree(buffer);
 }
 #endif
+
+char *base64_decode(const char *input) {
+    BIO *bio, *b64;
+    char *buffer = malloc(strlen(input));
+    int decode_len = strlen(input);
+    
+    bio = BIO_new_mem_buf((void*)input, -1);
+    b64 = BIO_new(BIO_f_base64());
+    bio = BIO_push(b64, bio);
+    
+    BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL);
+    decode_len = BIO_read(bio, buffer, decode_len);
+    buffer[decode_len] = '\0';
+    
+    BIO_free_all(bio);
+    return buffer;
+}
